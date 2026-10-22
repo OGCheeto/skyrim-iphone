@@ -75,3 +75,10 @@ Logic is in `js/weather.js`: pure functions plus small classes, with no DOM, so 
 - **Saves:** weather is not saved; it is re-rolled on load. Save and load are otherwise unchanged.
 
 Tests: `node test/weather.test.mjs`. For the headless check, run `test/weather.playwright.mjs`. It saves screenshots to `/tmp/wx-*.png`.
+
+## Fishing
+- Spots: **Kettle Pond** (just east of Kettleford), **Highland Tarn**, **Vale Stream**. Walk up and tap **Use**.
+- Wait for a bite → tap when the bobber dips (0.8 s window) → hold to raise / release to sink, keeping the marker in the tension zone until the catch meter fills. Out of zone drains the meter; too long out snaps the line. Cancel anytime. The world pauses while fishing; you can't start with an awake enemy nearby.
+- Fish: Icefin (common), Silverjaw, Glacier Pike, Frostgill Eel (rare). Sell raw to Ilsa the Trader, or cook at the Kettleford fire (Use with raw fish). Frostgill Jerky gives a 120 s frost ward (−30% wolf/wight damage).
+- Storms raise the bite rate. Quest: Brannoc's "A Taste of Icefin" (bring 3 icefin → 60 gold + Bone Hook, which widens the tension zone).
+- Tests: `node test/fishing.test.mjs`; headless: `test/fishing.playwright.mjs`.

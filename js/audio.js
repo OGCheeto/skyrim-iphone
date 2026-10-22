@@ -157,6 +157,9 @@ export const sfx = {
   quest: () => [392, 523, 659].forEach((f, i) => setTimeout(() => tone(f, 0.35, 'sine', 0.22), i * 160)),
   roar: () => { tone(70, 1.2, 'sawtooth', 0.4, -30); noise(1.2, 0.4, 200, 0.7); },
   fire: () => noise(0.4, 0.3, 700, 0.8),
+  splash: () => { noise(0.35, 0.35, 900, 0.7); noise(0.18, 0.2, 2600, 1.5); tone(180, 0.15, 'sine', 0.12, -90); },
+  bite: () => { tone(1320, 0.18, 'sine', 0.22); setTimeout(() => tone(1760, 0.3, 'sine', 0.2), 90); },
+  cook: () => { noise(0.6, 0.18, 3200, 0.8); tone(520, 0.12, 'triangle', 0.12); },
   click: () => tone(1200, 0.03, 'square', 0.08),
   die: () => tone(300, 1, 'triangle', 0.3, -250),
 };

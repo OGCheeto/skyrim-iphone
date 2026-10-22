@@ -1,5 +1,6 @@
 // Pure game logic: world generation, player data, quests, loot, saving. No DOM.
 export const TILE = 32;
+import * as F from './fishing.js';
 export const T = { SNOW:0, DEEP:1, ROCK:2, PINE:3, ROAD:4, ICE:5, WALL:6, FLOOR:7, ASH:8, LAVA:9, HUT:10 };
 const BLOCK = new Set([T.ROCK, T.PINE, T.WALL, T.LAVA, T.HUT]);
 
@@ -60,7 +61,7 @@ export class World {
     const r = rng(seed);
     this.terrain(r);
     this.road(this.village, this.ruins, r); this.road(this.village, this.lair, r);
-    this.buildVillage(); this.buildRuins(); this.buildLair(); this.placeChests(); this.placeEnemies(r);
+    this.buildVillage(); this.buildRuins(); this.buildLair(); this.buildFishing(); this.placeChests(); this.placeEnemies(r);
   }
   get spawn() { return { x: this.village.x, y: this.village.y - 3 }; }
   get galestone() { return { x: this.ruins.x, y: this.ruins.y + 2 }; }
@@ -127,6 +128,18 @@ export class World {
     for (const [dx, dy] of [[-4, 3], [5, -2], [-2, -5], [2, 5]]) { this.set(c.x + dx, c.y + dy, T.LAVA); this.set(c.x + dx + 1, c.y + dy, T.LAVA); }
     for (let dy = -9; dy <= 9; dy++) for (let dx = -9; dx <= 9; dx++) { const q = dx * dx + dy * dy; if (q >= 72 && q <= 90 && !(dx < 0 && Math.abs(dy) < 3)) this.set(c.x + dx, c.y + dy, T.ROCK); }
   }
+  clear(c, rad) { for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) if (dx * dx + dy * dy <= rad * rad && !this.walk(c.x + dx, c.y + dy) && this.get(c.x + dx, c.y + dy) !== T.HUT) this.set(c.x + dx, c.y + dy, T.SNOW); }
+  // Small frozen ponds/streams with fishing holes. Clear a snow margin so they're always reachable.
+  buildFishing() {
+    const v = this.village;
+    this.fire = { x: v.x - 1, y: v.y + 3 }; // village cookfire
+    const ponds = [{ name: 'Kettle Pond', c: { x: v.x + 6, y: v.y + 2 }, r: 1 }, { name: 'Highland Tarn', c: { x: 30, y: 9 }, r: 2 }];
+    this.fishing = ponds.map((p, id) => { this.clear(p.c, p.r + 2); this.disk(p.c, p.r, T.ICE); return { id, name: p.name, x: p.c.x, y: p.c.y }; });
+    // frozen stream in Whitepass Vale; fish from its bank
+    for (let x = 32; x <= 40; x++) { for (let y = 35; y <= 39; y++) if (!this.walk(x, y)) this.set(x, y, T.SNOW); this.set(x, 37, T.ICE); }
+    this.fishing.push({ id: 2, name: 'Vale Stream', x: 36, y: 37 });
+    for (const [x, y] of [[32, 37], [40, 37]]) { for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) if (!this.walk(x + dx, y + dy)) this.set(x + dx, y + dy, T.SNOW); }
+  }
   placeChests() {
     const R = this.ruins, Lr = this.lair;
     this.chests = [[R.x + 4, R.y + 3], [R.x - 4, R.y - 3], [30, 30], [40, 18], [22, 44], [Lr.x + 6, Lr.y + 3]].map(([x, y], id) => {
@@ -162,6 +175,7 @@ export function initialQuests() {
       `Slay frost wolves roaming the passes (0/${WOLF_TARGET}).`,
       'Return to Hunter Brannoc for your reward.',
       "Brannoc's flock is safe. Reward claimed."] },
+    fish: F.fishQuest(),
   };
 }
 
@@ -172,7 +186,7 @@ export function newSave(cls, world) {
     v: 1, cls, level: 1, xp: 0, gold: 25,
     maxHp: C.hp, maxSt: C.st, maxMp: C.mp, hp: C.hp, st: C.st, mp: C.mp,
     inv: [w, LOOT.hp(), LOOT.hp(), LOOT.mp()], weapon: w.id, armor: null,
-    quests: initialQuests(), wolves: 0, boss: false, galestone: false, chests: [],
+    quests: initialQuests(), cooked: 0, frostWard: 0, boneHook: false, wolves: 0, boss: false, galestone: false, chests: [],
     x: sp.x, y: sp.y, fog: new Array(Math.ceil(world.w * world.h / 32)).fill(0), savedAt: 0,
   };
 }
@@ -207,6 +221,7 @@ export function use(s, id) {
   if (it.kind === 'hpot') s.hp = Math.min(s.maxHp, s.hp + it.power);
   else if (it.kind === 'mpot') s.mp = Math.min(s.maxMp, s.mp + it.power);
   else if (it.kind === 'spot') s.st = Math.min(s.maxSt, s.st + it.power);
+  else if (it.kind === 'food' || it.kind === 'ward') { const m = F.eat(s, it); s.inv.splice(i, 1); F.syncFishQuest(s); return m; }
   else return null;
   s.inv.splice(i, 1); return `Drank ${it.name}`;
 }
@@ -214,8 +229,9 @@ export function sell(s, id) {
   const i = s.inv.findIndex((x) => x.id === id); if (i < 0) return 0;
   const it = s.inv[i]; if (it.kind === 'quest' || it.id === s.weapon) return 0;
   if (it.id === s.armor) s.armor = null;
-  const p = Math.max(1, Math.floor(it.value / 2)); s.inv.splice(i, 1); s.gold += p; return p;
+  const p = sellPrice(it); s.inv.splice(i, 1); s.gold += p; F.syncFishQuest(s); return p;
 }
+export const sellPrice = (it) => it.kind === 'fish' ? it.value : Math.max(1, Math.floor(it.value / 2)); // Ilsa pays full price for fresh fish
 export function wolfKill(s) {
   const q = s.quests.side; if (q.stage !== 1) return;
   s.wolves++;
@@ -249,12 +265,13 @@ export function talk(s, role) {
     return { text: 'The skies are clear for the first time in a generation. Kettleford owes you everything.' };
   }
   if (role === 'hunter') {
+    if (q.stage !== 0 && q.stage !== 2) { const f = F.hunterFish(s, item); if (f) { if (s.quests.fish.stage === 2) gainXP(s, 40); return { text: f }; } }
     if (q.stage === 0) { q.stage = 1; return { text: `Frost wolves have been taking my goats. Thin their numbers - ${WOLF_TARGET} pelts' worth - and I'll make it worth your while.` }; }
     if (q.stage === 1) return { text: `Still hearing howls. ${s.wolves}/${WOLF_TARGET} so far.` };
     if (q.stage === 2) { q.stage = 3; s.gold += 75; gainXP(s, 60); s.inv.push(item(LOOT.armors[0]), LOOT.sp()); return { text: 'Quiet nights at last! Take this mantle and some coin. (+75 gold, Fur Mantle)' }; }
     return { text: 'My goats thank you. Well, they would if they could.' };
   }
-  return { text: 'Potions, 30 gold apiece. I also buy whatever you drag out of those barrows.', shop: true };
+  return { text: 'Potions, 30 gold apiece. I buy whatever you drag out of those barrows - and fresh fish, full price.', shop: true };
 }
 export function buy(s, kind) {
   if (s.gold < 30) return false;
@@ -264,5 +281,9 @@ export function buy(s, kind) {
 export const SAVE_KEY = 'frosthold.save.v1';
 export const serialize = (s) => JSON.stringify({ ...s, savedAt: Date.now() });
 export function deserialize(str) {
-  try { const s = JSON.parse(str); return s && s.v === 1 && CLASSES[s.cls] ? s : null; } catch { return null; }
+  try {
+    const s = JSON.parse(str); if (!(s && s.v === 1 && CLASSES[s.cls])) return null;
+    s.quests.fish ||= F.fishQuest(); s.cooked ||= 0; s.frostWard ||= 0; s.boneHook ||= false; // migrate pre-fishing saves
+    return s;
+  } catch { return null; }
 }

@@ -1,5 +1,6 @@
 import * as C from './core.js';
 import * as Wx from './weather.js';
+import * as F from './fishing.js';
 import { sfx, unlockAudio, setScene, suspendAudio, resumeAudio, getSettings, setSettings, combatLevel, audioDebug } from './audio.js';
 
 const { TILE, T } = C;
@@ -176,20 +177,27 @@ function nearest() {
   for (const n of world.npcs) if (near(n)) return { type: 'npc', n, label: `Talk to ${n.name}` };
   for (const c of world.chests) if (!S.chests.includes(c.id) && near(c)) return { type: 'chest', c, label: 'Open chest' };
   const gs = world.galestone; if (!S.galestone && near(gs)) return { type: 'stone', label: 'Take the Galestone' };
+  const near2 = (o) => Math.hypot(o.x - tx, o.y - ty) < 2.2;
+  for (const f of world.fishing) if (near2(f)) return { type: 'fish', f, label: `Fish at ${f.name}` };
+  if (near2(world.fire) && S.inv.some(F.isRaw)) return { type: 'fire', label: 'Cook fish at the fire' };
   return null;
 }
 function doUse() {
   const it = nearest(); if (!it) return;
   sfx.click();
   if (it.type === 'npc') {
-    const before = [S.quests.main.stage, S.quests.side.stage], lvl = S.level, res = C.talk(S, it.n.role);
-    if (before[0] !== S.quests.main.stage || before[1] !== S.quests.side.stage) { sfx.quest(); save(true); }
+    const before = [S.quests.main.stage, S.quests.side.stage, S.quests.fish.stage], lvl = S.level, res = C.talk(S, it.n.role);
+    if (before[0] !== S.quests.main.stage || before[1] !== S.quests.side.stage || before[2] !== S.quests.fish.stage) { sfx.quest(); save(true); }
     if (S.level > lvl) levelUp();
     const btns = res.shop ? [['Health potion (30g)', () => shop('hp')], ['Magicka potion (30g)', () => shop('mp')], ['Sell loot', () => { closeDialog(); openPanel('inv', true); }], ['Leave', closeDialog]] : [['Farewell', closeDialog]];
     dialog(it.n.name, res.text, btns);
   } else if (it.type === 'chest') {
     S.chests.push(it.c.id); const l = C.chestLoot(); S.gold += l.gold; S.inv.push(...l.items); sfx.loot();
     toast(`Chest: +${l.gold}g\n${l.items.map((i) => i.name).join(', ')}`); save(true);
+  } else if (it.type === 'fish') startFishing(it.f);
+  else if (it.type === 'fire') {
+    const names = []; for (const f of S.inv.filter(F.isRaw)) names.push(F.cook(S, f.id, C.item));
+    F.syncFishQuest(S); sfx.cook(); toast(`Cooked ${names.length}: ${[...new Set(names)].join(', ')}`); save(true);
   } else if (it.type === 'stone') {
     S.galestone = true; S.inv.push(C.item({ name: 'Galestone', kind: 'quest', power: 0, value: 0 }));
     if (S.quests.main.stage <= C.MAIN.STONE) S.quests.main.stage = C.MAIN.RETURN;
@@ -197,6 +205,60 @@ function doUse() {
   }
 }
 function shop(k) { if (C.buy(S, k)) { sfx.loot(); toast(`Bought potion. ${S.gold}g left`); } else toast('Not enough gold'); }
+
+// ---------- Fishing ----------
+let fishing = null, fishEndT = 0;
+const fcv = $('fishCv'), fg = fcv.getContext('2d');
+function startFishing(spot) {
+  const threat = ents.some((e) => e.awake && Math.hypot(e.x - P.x, e.y - P.y) < 320);
+  if (threat) { toast('Not with enemies this close!'); return; }
+  fishing = new F.FishingGame({ storm: weather.mix('storm'), hook: S.boneHook }); fishing.spot = spot; fishEndT = 0;
+  paused = true; $('fishing').classList.remove('hidden'); $('fishMsg').textContent = 'Waiting for a bite… tap when the bobber dips'; sfx.splash();
+}
+function endFishing() { fishing = null; $('fishing').classList.add('hidden'); paused = false; updateHud(true); }
+function fishPress(on) {
+  if (!fishing || fishing.done) return;
+  if (on) { const st = fishing.state, r = fishing.tap(); if (st === 'bite' && r === 'reel') { sfx.splash(); $('fishMsg').textContent = 'Hold to raise · release to sink · keep the marker in the zone'; } fishing.hold(true); }
+  else fishing.hold(false);
+}
+$('fishing').addEventListener('pointerdown', (e) => { if (e.target.id === 'fishCancel') return; e.preventDefault(); fishPress(true); });
+for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) $('fishing').addEventListener(ev, () => fishPress(false));
+$('fishCancel').onclick = (e) => { e.stopPropagation(); if (fishing) { fishing.cancel(); finishFishing(); } };
+function finishFishing() {
+  const f = fishing; $('fishMsg').textContent = f.reason; fishEndT = 1.4;
+  if (f.state === 'caught') { S.inv.push(F.rawFishItem(f.fish, C.item)); F.syncFishQuest(S); sfx.loot(); save(true); toast(`${F.FISH[f.fish].name} (${F.FISH[f.fish].rarity})`); }
+  else if (f.state === 'snapped') sfx.hurt(); else if (f.state === 'cancelled') fishEndT = 0.2;
+}
+function updateFishing(dt) {
+  if (!fishing) return;
+  if (fishing.done) { fishEndT -= dt; if (fishEndT <= 0) endFishing(); return; }
+  const before = fishing.state, r = fishing.update(dt);
+  if (r === 'bite!') { sfx.bite(); $('fishMsg').textContent = 'BITE! Tap now!'; }
+  if (fishing.done && before !== fishing.state) finishFishing();
+}
+function drawFishing(time) {
+  const f = fishing; if (!f) return;
+  const w = fcv.clientWidth, h = fcv.clientHeight; if (fcv.width !== w * DPR) { fcv.width = w * DPR; fcv.height = h * DPR; }
+  fg.setTransform(DPR, 0, 0, DPR, 0, 0); fg.clearRect(0, 0, w, h);
+  const cx = w * 0.38, cy = h * 0.52;
+  fg.fillStyle = '#cfe3f0'; fg.beginPath(); fg.ellipse(cx, cy, w * 0.26, h * 0.3, 0, 0, 7); fg.fill(); // ice
+  fg.fillStyle = '#123a5a'; fg.beginPath(); fg.ellipse(cx, cy, w * 0.11, h * 0.13, 0, 0, 7); fg.fill(); // hole
+  const bob = f.state === 'bite' ? 10 + 6 * Math.sin(time / 40) : Math.sin(time / 400) * 2, by = cy + bob;
+  fg.strokeStyle = '#fff8'; fg.lineWidth = 1; fg.beginPath(); fg.moveTo(cx + 120, cy - 140); fg.lineTo(cx, by - 8); fg.stroke();
+  fg.fillStyle = '#e8463a'; fg.beginPath(); fg.arc(cx, by - 4, 7, Math.PI, 0); fg.fill(); fg.fillStyle = '#fff'; fg.beginPath(); fg.arc(cx, by - 4, 7, 0, Math.PI); fg.fill();
+  if (f.state === 'bite') { fg.strokeStyle = '#ffffffaa'; fg.lineWidth = 2; for (let k = 1; k <= 2; k++) { fg.beginPath(); fg.ellipse(cx, by, 12 * k + (time / 30) % 10, 5 * k, 0, 0, 7); fg.stroke(); } }
+  if (f.state === 'reel' || (f.done && f.fish && f.meter > 0)) {
+    const bx = w * 0.72, bt = h * 0.12, bh = h * 0.7, bw = 34;
+    fg.fillStyle = '#0b121ccc'; fg.fillRect(bx, bt, bw, bh); fg.strokeStyle = '#fff5'; fg.strokeRect(bx, bt, bw, bh);
+    const zw = f.zoneWidth * bh, zy = bt + (1 - f.zone) * bh - zw / 2;
+    fg.fillStyle = f.inZone ? '#3fa34dcc' : '#d4b04c99'; fg.fillRect(bx + 2, zy, bw - 4, zw);
+    const my = bt + (1 - f.marker) * bh; fg.fillStyle = '#fff'; fg.fillRect(bx - 6, my - 3, bw + 12, 6);
+    const mx = bx + bw + 16; fg.fillStyle = '#0b121ccc'; fg.fillRect(mx, bt, 12, bh); fg.fillStyle = f.out > 0.8 ? '#c0392b' : '#2f9fd6'; fg.fillRect(mx, bt + bh * (1 - Math.max(0, f.meter)), 12, bh * Math.max(0, f.meter));
+    fg.fillStyle = '#fff'; fg.font = '11px Georgia'; fg.textAlign = 'center'; fg.fillText('Tension', bx + bw / 2, bt + bh + 14); fg.fillText('Catch', mx + 6, bt + bh + 14);
+    if (f.out > 0.5 && !f.done) { fg.fillStyle = '#ff6b5a'; fg.fillText('Line straining!', bx + bw / 2, bt - 6); }
+  }
+  fg.fillStyle = '#d4b04c'; fg.font = 'bold 14px Georgia'; fg.textAlign = 'left'; fg.fillText(`${f.spot.name}${f.storm > 0.3 ? ' · storm: fish are biting' : ''}`, 16, 22);
+}
 
 // ---------- Dialog / panels ----------
 function dialog(name, text, buttons) {
@@ -214,27 +276,29 @@ function audioRow(k, label) {
   const st = getSettings(), muted = st[k === 'music' ? 'musicMuted' : 'ambienceMuted'];
   return `<div class="it"><span class="n">${label}</span><input type="range" id="vol-${k}" min="0" max="100" value="${Math.round(st[k] * 100)}" style="width:40%"><button id="mute-${k}">${muted ? 'Unmute' : 'Mute'}</button></div>`;
 }
-const kindLabel = { weapon: 'Weapon', armor: 'Armor', hpot: 'Potion', mpot: 'Potion', spot: 'Potion', quest: 'Quest', valuable: 'Valuable' };
+const kindLabel = { fish: 'Raw fish', food: 'Food', ward: 'Food', weapon: 'Weapon', armor: 'Armor', hpot: 'Potion', mpot: 'Potion', spot: 'Potion', quest: 'Quest', valuable: 'Valuable' };
 function renderPanel() {
   document.querySelectorAll('.tab[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
   const body = $('panelBody'); body.innerHTML = '';
   if (tab === 'inv') {
     const head = document.createElement('div'); head.className = 'it'; head.innerHTML = `<span class="n"><b>${S.gold} gold</b>${selling ? ' — selling to Ilsa' : ''}</span>`; body.appendChild(head);
-    const order = ['weapon', 'armor', 'hpot', 'mpot', 'spot', 'valuable', 'quest'];
+    const order = ['weapon', 'armor', 'hpot', 'mpot', 'spot', 'food', 'ward', 'fish', 'valuable', 'quest'];
     for (const it of [...S.inv].sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind))) {
       const row = document.createElement('div'); row.className = 'it';
       const eq = it.id === S.weapon || it.id === S.armor;
-      const detail = { weapon: `Damage ${it.power}`, armor: `Armor ${it.power}`, hpot: `+${it.power} health`, mpot: `+${it.power} magicka`, spot: `+${it.power} stamina`, quest: 'Quest item', valuable: `Worth ${it.value}g` }[it.kind];
+      const detail = { weapon: `Damage ${it.power}`, armor: `Armor ${it.power}`, hpot: `+${it.power} health`, mpot: `+${it.power} magicka`, spot: `+${it.power} stamina`, quest: 'Quest item', valuable: `Worth ${it.value}g`, fish: `${F.FISH[it.fish]?.rarity} · cook at the village fire`, food: `+${it.power} ${it.stat === 'st' ? 'stamina' : 'health'}`, ward: `Frost resistance ${it.power}s` }[it.kind];
       row.innerHTML = `<span class="n">${it.name} ${eq ? '<span class="eq">[equipped]</span>' : ''}<br><span class="d">${kindLabel[it.kind]} · ${detail}</span></span>`;
       const add = (label, fn) => { const b = document.createElement('button'); b.textContent = label; b.onclick = () => { fn(); sfx.click(); renderPanel(); }; row.appendChild(b); };
-      if (selling) { if (it.kind !== 'quest' && it.id !== S.weapon) add(`Sell ${Math.max(1, Math.floor(it.value / 2))}g`, () => C.sell(S, it.id)); }
+      if (selling) { if (it.kind !== 'quest' && it.id !== S.weapon) add(`Sell ${C.sellPrice(it)}g`, () => C.sell(S, it.id)); }
       else if (it.kind === 'weapon' && !eq) add('Equip', () => C.equip(S, it.id));
       else if (it.kind === 'armor') add(eq ? 'Remove' : 'Wear', () => C.equip(S, it.id));
+      else if (it.kind === 'fish') { if (nearest()?.type === 'fire') add('Cook', () => { const n = F.cook(S, it.id, C.item); F.syncFishQuest(S); sfx.cook(); toast(`Cooked ${n}`); }); }
+      else if (it.kind === 'food' || it.kind === 'ward') add('Eat', () => { const m = C.use(S, it.id); if (m) toast(m); });
       else if (['hpot', 'mpot', 'spot'].includes(it.kind)) add('Drink', () => { const m = C.use(S, it.id); if (m) toast(m); });
       body.appendChild(row);
     }
   } else if (tab === 'journal') {
-    for (const q of [S.quests.main, S.quests.side]) {
+    for (const q of [S.quests.main, S.quests.side, S.quests.fish]) {
       const d = document.createElement('div'); d.className = 'q';
       const done = q.stage >= q.stages.length - 1;
       d.innerHTML = `<h4>${q.side ? 'Side' : 'Main'}: ${q.title} ${done ? '✔' : ''}</h4>` + q.stages.slice(0, q.stage).map((s) => `<div class="done">${s}</div>`).join('') + `<div>▸ ${q.stages[q.stage]}</div>`;
@@ -246,6 +310,7 @@ function renderPanel() {
     body.innerHTML = `<div class="q"><h4>${Cl.title} — Level ${S.level}</h4>
       XP ${S.xp} / ${C.xpNeeded(S.level)}<br>Health ${Math.round(S.hp)}/${S.maxHp} · Stamina ${Math.round(S.st)}/${S.maxSt} · Magicka ${Math.round(S.mp)}/${S.maxMp}<br>
       Weapon: ${w ? w.name + ' (' + w.power + ')' : 'none'} · Armor: ${a ? a.name + ' (' + a.power + ')' : 'none'}<br>
+      Fish cooked: ${S.cooked || 0}${S.boneHook ? ' · Bone Hook' : ''}${S.frostWard > 0 ? ` · Frost ward ${Math.ceil(S.frostWard)}s` : ''}<br>
       Galecry: ${C.empowered(S) ? 'EMPOWERED' : 'awakened'} — ${Math.round(C.shoutDamage(S))} dmg, ${C.shoutCooldown(S)}s cooldown</div>
       <div class="row" style="margin-top:12px"><button class="big-btn" id="saveBtn">Save game</button><button class="big-btn" id="loadBtn">Load save</button><button class="big-btn" id="quitBtn">Title screen</button></div>
       <div class="q"><h4>Audio</h4>${audioRow('music', 'Music')}${audioRow('ambience', 'Ambience')}</div>`;
@@ -349,6 +414,7 @@ function update(dt) {
   S.st = Math.min(S.maxSt, S.st + (P.swing > 0 ? 4 : 18) * dt);
   S.mp = Math.min(S.maxMp, S.mp + 6 * dt);
   S.hp = Math.min(S.maxHp, S.hp + 1.2 * dt);
+  if (S.frostWard > 0) S.frostWard = Math.max(0, S.frostWard - dt);
 
   // enemies
   for (const e of ents) {
@@ -372,7 +438,7 @@ function update(dt) {
         if (dist > e.d.range) { tx = dx / dist; ty = dy / dist; }
         e.spd = enraged ? e.d.speed * 1.4 : e.d.speed;
       } else if (dist > e.d.range * 0.8) { tx = dx / dist; ty = dy / dist; }
-      if (dist < e.d.range + 10 && e.cd <= 0) { e.cd = e.d.cd; e.lunge = 0.2; hurtPlayer(e.d.dmg); }
+      if (dist < e.d.range + 10 && e.cd <= 0) { e.cd = e.d.cd; e.lunge = 0.2; hurtPlayer(e.d.dmg * F.frostScale(S, e.kind)); }
     } else {
       const hx = e.hx - e.x, hy = e.hy - e.y, hd = Math.hypot(hx, hy);
       if (hd > 40 && (e.awake || hd > 120)) { tx = hx / hd; ty = hy / hd; } else e.awake = false;
@@ -446,6 +512,8 @@ function render(time) {
   if (!S.galestone) { const c = world.center(world.galestone), [sx, sy] = toS(c.x, c.y); g.fillStyle = '#555'; g.fillRect(sx - 10 * ZOOM, sy, 20 * ZOOM, 8 * ZOOM); g.fillStyle = `hsl(195,90%,${60 + Math.sin(time / 200) * 15}%)`; g.beginPath(); g.arc(sx, sy - 6 * ZOOM, 7 * ZOOM, 0, 7); g.fill(); }
   for (const c of world.chests) { const p = world.center(c), [sx, sy] = toS(p.x, p.y), o = S.chests.includes(c.id); g.fillStyle = o ? '#5a4030' : '#8b5a2b'; g.fillRect(sx - 10 * ZOOM, sy - 7 * ZOOM, 20 * ZOOM, 14 * ZOOM); g.fillStyle = '#d4b04c'; g.fillRect(sx - 2 * ZOOM, sy - 3 * ZOOM, 4 * ZOOM, 5 * ZOOM); }
   for (const n of world.npcs) { const p = world.center(n); drawHuman(p.x, p.y, n.color, '#3a2a20', 0, -1, Math.sin(time / 500) * 0.3); const [sx, sy] = toS(p.x, p.y); g.fillStyle = '#fff'; g.font = `${10 * ZOOM | 0}px Georgia`; g.textAlign = 'center'; g.fillText(n.name, sx, sy - 22 * ZOOM); if (questMarker(n.role)) { g.fillStyle = '#d4b04c'; g.font = `bold ${16 * ZOOM | 0}px Georgia`; g.fillText('!', sx, sy - 32 * ZOOM); } }
+  for (const f of world.fishing) { const p = world.center(f), [sx, sy] = toS(p.x, p.y); g.fillStyle = '#123a5a'; g.beginPath(); g.ellipse(sx, sy, 9 * ZOOM, 6 * ZOOM, 0, 0, 7); g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.stroke(); g.fillStyle = '#e8463a'; g.fillRect(sx - 2, sy - 3 - Math.abs(Math.sin(time / 500)) * 3, 4, 4); }
+  { const p = world.center(world.fire), [sx, sy] = toS(p.x, p.y); g.fillStyle = '#5a4030'; g.fillRect(sx - 9 * ZOOM, sy + 2 * ZOOM, 18 * ZOOM, 4 * ZOOM); for (let k = 0; k < 3; k++) { g.fillStyle = ['#ff8a3a', '#ffc04a', '#ff5a2a'][k]; g.beginPath(); g.arc(sx + (k - 1) * 4 * ZOOM, sy - Math.abs(Math.sin(time / 120 + k)) * 5 * ZOOM, (4 - k) * ZOOM, 0, 7); g.fill(); } }
   for (const e of ents) drawEnemy(e, time);
   const Cl = { warrior: '#9a3b2f', mage: '#3b5ea8', rogue: '#3f4a3a' }[S.cls];
   if (!(P.inv > 0 && Math.floor(time / 60) % 2)) drawHuman(P.x, P.y, Cl, '#e0c9a6', P.fx, P.fy, Math.sin(P.walk) * 0.5, true);
@@ -548,7 +616,7 @@ $('contBtn').onclick = () => { unlockAudio(); const s = loadSave(); if (s) start
 function frame(t) {
   const dt = Math.min(0.05, (t - last) / 1000 || 0); last = t;
   if (running && !paused && !document.hidden) gov.sample(dt);
-  update(dt); render(t); requestAnimationFrame(frame);
+  updateFishing(dt); update(dt); render(t); drawFishing(t); requestAnimationFrame(frame);
 }
 // Audio must be created/resumed inside a user gesture (iOS Safari).
 for (const ev of ['touchstart', 'touchend', 'pointerdown', 'keydown']) document.addEventListener(ev, unlockAudio, { capture: true, passive: true });
@@ -558,4 +626,4 @@ setInterval(() => { if (!running) setScene({ region: 'Whitepass Vale', lair: 0, 
 showTitle(); requestAnimationFrame(frame);
 
 // test hook
-window.__frost = { audioDebug, getSettings, get paused() { return paused; }, get running() { return running; }, get S() { return S; }, get P() { return P; }, get ents() { return ents; }, world, C, input, weather, gov, pool, W: Wx, get push() { return push; }, get shots() { return shots; }, get bossFight() { return bossFight; } };
+window.__frost = { audioDebug, getSettings, get paused() { return paused; }, get running() { return running; }, get S() { return S; }, get P() { return P; }, get ents() { return ents; }, world, C, input, weather, gov, pool, W: Wx, get push() { return push; }, get fishing() { return fishing; }, F, get shots() { return shots; }, get bossFight() { return bossFight; } };

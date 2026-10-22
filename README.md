@@ -48,3 +48,16 @@ node test/core.test.mjs       # logic tests: world reachability, quests, levelin
 - `js/game.js`: game loop, rendering, combat, AI, input, menus
 - `js/audio.js`: procedural WebAudio sound effects
 - `manifest.webmanifest`, `icon*`: Add to Home Screen support
+
+## Audio
+
+All sound is generated in real time with WebAudio. The game ships no audio files.
+
+- **Ambience:** wind made from filtered noise, with gusts that vary by region. They are calm in Kettleford and strongest on Cinderhorn Peak. Near the dragon's lair an ash and fire rumble fades in. The wind drops inside the ruins.
+- **Combat music:** a slow taiko and war-drum loop. It fades in when enemies are engaged or within reach, and fades out about 4 s after a fight ends. The dragon fight crossfades to a faster, denser variant.
+- **Mix:** separate SFX, music, and ambience buses feed a master gain and a limiter, so nothing clips. Music sits under the SFX.
+- **iOS:** audio starts on the first tap. It suspends when the page goes to the background and resumes when it comes back.
+- **Settings:** Menu → Character → Audio has Music and Ambience volume sliders and mute toggles. They are saved in localStorage under `frosthold.audio.v1`.
+- **Performance:** noise buffers are made once and looped. Drums use a 50 ms lookahead scheduler.
+
+Tests: `node test/core.test.mjs && node test/audio.test.mjs`. For the headless check, serve on :8765 and run `test/audio.playwright.mjs` with playwright-core.

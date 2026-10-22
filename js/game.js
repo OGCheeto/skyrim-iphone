@@ -1,5 +1,5 @@
 import * as C from './core.js';
-import { sfx, unlockAudio } from './audio.js';
+import { sfx, unlockAudio, setScene, suspendAudio, resumeAudio, getSettings, setSettings, combatLevel, audioDebug } from './audio.js';
 
 const { TILE, T } = C;
 const $ = (id) => document.getElementById(id);
@@ -11,6 +11,7 @@ let W = 0, H = 0, DPR = 1, ZOOM = 1.25;
 let S = null;                 // save data
 let ents = [], shots = [], fx = [], texts = [];
 let P = null;                 // runtime player
+let sinceCombat = 99, sceneT = 0;
 let running = false, paused = false, last = 0, shoutCd = 0, regenT = 0, hudT = 0;
 const input = { mx: 0, my: 0, attack: false, spell: false, shout: false, use: false };
 
@@ -208,6 +209,10 @@ function closeDialog() { $('dialog').classList.add('hidden'); paused = false; }
 let tab = 'inv', selling = false;
 function openPanel(t = tab, sell = false) { tab = t; selling = sell; paused = true; $('panel').classList.remove('hidden'); renderPanel(); }
 function closePanel() { $('panel').classList.add('hidden'); paused = false; selling = false; updateHud(true); }
+function audioRow(k, label) {
+  const st = getSettings(), muted = st[k === 'music' ? 'musicMuted' : 'ambienceMuted'];
+  return `<div class="it"><span class="n">${label}</span><input type="range" id="vol-${k}" min="0" max="100" value="${Math.round(st[k] * 100)}" style="width:40%"><button id="mute-${k}">${muted ? 'Unmute' : 'Mute'}</button></div>`;
+}
 const kindLabel = { weapon: 'Weapon', armor: 'Armor', hpot: 'Potion', mpot: 'Potion', spot: 'Potion', quest: 'Quest', valuable: 'Valuable' };
 function renderPanel() {
   document.querySelectorAll('.tab[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
@@ -241,7 +246,13 @@ function renderPanel() {
       XP ${S.xp} / ${C.xpNeeded(S.level)}<br>Health ${Math.round(S.hp)}/${S.maxHp} · Stamina ${Math.round(S.st)}/${S.maxSt} · Magicka ${Math.round(S.mp)}/${S.maxMp}<br>
       Weapon: ${w ? w.name + ' (' + w.power + ')' : 'none'} · Armor: ${a ? a.name + ' (' + a.power + ')' : 'none'}<br>
       Galecry: ${C.empowered(S) ? 'EMPOWERED' : 'awakened'} — ${Math.round(C.shoutDamage(S))} dmg, ${C.shoutCooldown(S)}s cooldown</div>
-      <div class="row" style="margin-top:12px"><button class="big-btn" id="saveBtn">Save game</button><button class="big-btn" id="loadBtn">Load save</button><button class="big-btn" id="quitBtn">Title screen</button></div>`;
+      <div class="row" style="margin-top:12px"><button class="big-btn" id="saveBtn">Save game</button><button class="big-btn" id="loadBtn">Load save</button><button class="big-btn" id="quitBtn">Title screen</button></div>
+      <div class="q"><h4>Audio</h4>${audioRow('music', 'Music')}${audioRow('ambience', 'Ambience')}</div>`;
+    for (const k of ['music', 'ambience']) {
+      const mk = k === 'music' ? 'musicMuted' : 'ambienceMuted';
+      $(`vol-${k}`).oninput = (ev) => setSettings({ [k]: ev.target.value / 100, [mk]: false });
+      $(`mute-${k}`).onclick = () => { setSettings({ [mk]: !getSettings()[mk] }); renderPanel(); };
+    }
     $('saveBtn').onclick = () => save(); $('loadBtn').onclick = () => { const s = loadSave(); s ? startGame(s) : toast('No save found'); };
     $('quitBtn').onclick = () => { save(true); running = false; $('panel').classList.add('hidden'); $('hud').classList.add('hidden'); showTitle(); };
   }
@@ -377,10 +388,21 @@ function update(dt) {
   // hazard: lava
   if (world.get(Math.floor(P.x / TILE), Math.floor(P.y / TILE)) === T.LAVA) hurtPlayer(10);
 
+  sinceCombat += dt;
+  sceneT -= dt; if (sceneT <= 0) { sceneT = 0.25; updateScene(); }
   hudT -= dt; if (hudT <= 0) { hudT = 0.1; updateHud(); }
   regenT += dt; if (regenT > 30) { regenT = 0; save(true); }
 }
 
+function updateScene() {
+  let nearest = Infinity, bossAwake = false;
+  for (const e of ents) if (e.awake) { const d = Math.hypot(e.x - P.x, e.y - P.y); if (d < nearest) nearest = d; if (e.kind === 'boss') bossAwake = true; }
+  if (nearest < 320) sinceCombat = 0;
+  const tx = P.x / TILE, ty = P.y / TILE, dl = Math.hypot(tx - world.lair.x, ty - world.lair.y);
+  const lair = Math.max(0, Math.min(1, (18 - dl) / 10));
+  const tile = world.get(Math.floor(tx), Math.floor(ty));
+  setScene({ region: P.region || '', lair, combat: combatLevel({ bossAwake, nearestEngagedDist: nearest, sinceCombat }), outdoors: tile !== T.FLOOR });
+}
 function updateHud(force) {
   const pct = (a, b) => `${Math.max(0, Math.min(100, (a / b) * 100))}%`;
   $('hpBar').style.width = pct(S.hp, S.maxHp); $('stBar').style.width = pct(S.st, S.maxSt); $('mpBar').style.width = pct(S.mp, S.maxMp);
@@ -504,8 +526,12 @@ function frame(t) {
   const dt = Math.min(0.05, (t - last) / 1000 || 0); last = t;
   update(dt); render(t); requestAnimationFrame(frame);
 }
-document.addEventListener('visibilitychange', () => { if (document.hidden && running) save(true); });
+// Audio must be created/resumed inside a user gesture (iOS Safari).
+for (const ev of ['touchstart', 'touchend', 'pointerdown', 'keydown']) document.addEventListener(ev, unlockAudio, { capture: true, passive: true });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { if (running) save(true); suspendAudio(); } else resumeAudio(); });
+addEventListener('pagehide', suspendAudio); addEventListener('pageshow', resumeAudio);
+setInterval(() => { if (!running) setScene({ region: 'Whitepass Vale', lair: 0, combat: 0, outdoors: true }); }, 500);
 showTitle(); requestAnimationFrame(frame);
 
 // test hook
-window.__frost = { get paused() { return paused; }, get running() { return running; }, get S() { return S; }, get P() { return P; }, get ents() { return ents; }, world, C, input };
+window.__frost = { audioDebug, getSettings, get paused() { return paused; }, get running() { return running; }, get S() { return S; }, get P() { return P; }, get ents() { return ents; }, world, C, input };

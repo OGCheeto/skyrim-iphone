@@ -1,0 +1,21 @@
+// Headless audio smoke test (npm i playwright-core; serve repo on :8765)
+import { chromium } from 'playwright-core';
+const b = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] });
+const ctx = await b.newContext({ viewport: { width: 852, height: 393 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
+const p = await ctx.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(e.message)); p.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+const dbg = () => p.evaluate(() => window.__frost.audioDebug());
+await p.goto('http://localhost:8765/'); await p.waitForTimeout(300);
+console.log('before gesture:', await dbg());
+await p.tap('#newBtn'); await p.tap('.cls >> nth=1'); await p.waitForTimeout(2500);
+console.log('village:', await dbg());
+await p.evaluate(() => { const f = window.__frost, w = f.ents.find((e) => e.kind === 'wolf'); f.S.hp = f.S.maxHp = 99999; f.P.x = w.x - 60; f.P.y = w.y; });
+await p.waitForTimeout(2500); const c = await dbg(); console.log('wolf fight:', c);
+await p.evaluate(() => { const f = window.__frost, l = f.world.center(f.world.lair); f.P.x = l.x - 150; f.P.y = l.y; });
+await p.waitForTimeout(3000); const bo = await dbg(); console.log('boss:', bo);
+await p.evaluate(() => { const f = window.__frost, v = f.world.center(f.world.spawn); f.ents.forEach((e) => { e.awake = false; e.x = e.hx; e.y = e.hy; }); f.P.x = v.x; f.P.y = v.y; });
+await p.waitForTimeout(9000); const after = await dbg(); console.log('after combat:', after);
+await p.tap('#menuBtn'); await p.tap('[data-tab=char]'); await p.tap('#mute-music'); await p.waitForTimeout(500);
+const muted = await dbg(); console.log('music muted gain:', muted.music);
+await p.reload(); await p.waitForTimeout(300); const st = await p.evaluate(() => window.__frost.getSettings()); console.log('persisted:', st);
+const ok = c.combatFade > 0.5 && bo.bossFade > 0.5 && bo.combatFade < 0.5 && bo.rumble > 0.3 && after.combatFade < 0.1 && after.bossFade < 0.1 && muted.music < 0.02 && st.musicMuted;
+console.log('errors:', errs, ok ? 'AUDIO SMOKE PASS' : 'AUDIO SMOKE FAIL'); await b.close(); process.exit(ok && !errs.length ? 0 : 1);

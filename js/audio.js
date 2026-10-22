@@ -1,6 +1,6 @@
 // Procedural WebAudio: SFX, ambient wind/rumble, and a lookahead-scheduled war-drum track.
 // Graph: [sfx | music(combat, boss layers) | amb] buses -> master -> compressor/limiter -> destination
-let ctx = null, master = null, noiseBuf = null, brownBuf = null, wind = null, rumble = null;
+let ctx = null, master = null, noiseBuf = null, brownBuf = null, wind = null, rumble = null, rainL = null;
 const buses = {};
 const state = { region: '', lair: 0, combat: 0, outdoors: true };
 
@@ -76,6 +76,7 @@ export function unlockAudio() {
     wind = loopLayer(noiseBuf, 'bandpass', 500, 0.7);
     wind.hi = loopLayer(noiseBuf, 'highpass', 3500, 0.5);
     rumble = loopLayer(brownBuf, 'lowpass', 140, 0.9);
+    rainL = loopLayer(noiseBuf, 'highpass', 1800, 0.4); // rain hiss, on the ambience bus (respects volume/mute)
     startScheduler();
   }
   if (ctx.state !== 'running') ctx.resume();
@@ -84,14 +85,15 @@ export function suspendAudio() { if (ctx && ctx.state === 'running') ctx.suspend
 export function resumeAudio() { if (ctx && ctx.state !== 'running') ctx.resume(); }
 
 // ---------- Scene (call ~4x/sec) ----------
-export function setScene({ region = '', lair = 0, combat = 0, outdoors = true } = {}) {
-  Object.assign(state, { region, lair, combat, outdoors });
+export function setScene({ region = '', lair = 0, combat = 0, outdoors = true, storm = 0, rain = 0 } = {}) {
+  Object.assign(state, { region, lair, combat, outdoors, storm, rain });
   if (!ctx || ctx.state !== 'running') return;
-  const t = ctx.currentTime, gust = GUST[region] ?? 0.5, g = Math.random() * gust;
-  const base = outdoors ? 0.25 + 0.35 * gust : 0.08;
+  const t = ctx.currentTime, st = outdoors ? storm : 0, gust = Math.min(1.4, (GUST[region] ?? 0.5) + st * 0.5), g = Math.random() * gust * (1 + st * 0.5);
+  const base = outdoors ? 0.25 + 0.35 * gust + 0.2 * st : 0.08;
   wind.g.gain.setTargetAtTime((base + g * 0.4) * (1 - lair * 0.6), t, 0.8);
   wind.f.frequency.setTargetAtTime(300 + g * 900 + gust * 200, t, 1.0);
   wind.hi.g.gain.setTargetAtTime((0.04 + g * 0.08 * gust) * (1 - lair * 0.7), t, 0.8);
+  rainL.g.gain.setTargetAtTime(rain * (0.22 + Math.random() * 0.04), t, 1.5);
   rumble.g.gain.setTargetAtTime(lair * (0.9 + Math.random() * 0.3), t, 1.2);
   rumble.f.frequency.setTargetAtTime(90 + lair * 80 + Math.random() * 30, t, 1.5);
   buses.combat.gain.setTargetAtTime(combat === 1 ? 1 : 0, t, combat === 1 ? 0.6 : 1.5);
@@ -159,4 +161,4 @@ export const sfx = {
   die: () => tone(300, 1, 'triangle', 0.3, -250),
 };
 export const audioDebug = () => ctx ? { state: ctx.state, ...state, music: buses.music.gain.value, amb: buses.amb.gain.value,
-  combatFade: buses.combat.gain.value, bossFade: buses.boss.gain.value, wind: wind.g.gain.value, rumble: rumble.g.gain.value } : null;
+  combatFade: buses.combat.gain.value, bossFade: buses.boss.gain.value, wind: wind.g.gain.value, rain: rainL.g.gain.value, rumble: rumble.g.gain.value } : null;

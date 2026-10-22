@@ -1,4 +1,5 @@
 import * as C from './core.js';
+import * as Wx from './weather.js';
 import { sfx, unlockAudio, setScene, suspendAudio, resumeAudio, getSettings, setSettings, combatLevel, audioDebug } from './audio.js';
 
 const { TILE, T } = C;
@@ -303,6 +304,10 @@ addEventListener('keyup', (e) => {
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 let useLatch = false;
 
+// ---------- Weather ----------
+const weather = new Wx.Weather(), gov = new Wx.FpsGovernor(), pool = new Wx.ParticlePool();
+let push = 0, bossFight = false;
+
 // ---------- Update ----------
 function update(dt) {
   if (toastT > 0) { toastT -= dt; if (toastT <= 0) $('toast').style.opacity = 0; }
@@ -324,6 +329,13 @@ function update(dt) {
     const tx = Math.floor(P.x / TILE), ty = Math.floor(P.y / TILE);
     const nw = C.reveal(S, world, tx, ty, 6); if (nw.length) revealFog(nw);
     const reg = world.region(tx, ty); if (reg !== P.region) { if (P.region) toast(reg); P.region = reg; }
+  }
+  {
+    const tile = world.get(Math.floor(P.x / TILE), Math.floor(P.y / TILE));
+    bossFight = ents.some((e) => e.kind === 'boss' && e.awake);
+    weather.update(dt, P.region);
+    push = Wx.windPush({ region: P.region, indoors: tile === T.FLOOR, bossFight, storm: weather.mix('storm'), gust: weather.gust, dir: weather.dir });
+    if (push && world.canOccupy(P.x + push * dt, P.y, 10)) P.x += push * dt;
   }
   P.swing = Math.max(0, P.swing - dt); P.cast = Math.max(0, P.cast - dt); P.inv = Math.max(0, P.inv - dt); P.shoutFx = Math.max(0, P.shoutFx - dt);
   shoutCd = Math.max(0, shoutCd - dt);
@@ -376,7 +388,7 @@ function update(dt) {
   }
   // projectiles
   for (const s of shots) {
-    s.x += s.vx * dt; s.y += s.vy * dt; s.t -= dt;
+    Wx.driftProjectile(s, push, dt); s.x += s.vx * dt; s.y += s.vy * dt; s.t -= dt;
     if (!world.walk(Math.floor(s.x / TILE), Math.floor(s.y / TILE)) && world.get(Math.floor(s.x / TILE), Math.floor(s.y / TILE)) !== T.LAVA) s.t = 0;
     if (s.friendly) { for (const e of [...ents]) if (!s.hit.has(e) && Math.hypot(e.x - s.x, e.y - s.y) < e.d.r + s.r) { s.hit.add(e); hurtEnemy(e, s.dmg, s.vx * 0.15, s.vy * 0.15, 0.3); if (!s.pierce) s.t = 0; } }
     else if (Math.hypot(P.x - s.x, P.y - s.y) < 12 + s.r) { hurtPlayer(s.dmg); s.t = 0; }
@@ -401,14 +413,14 @@ function updateScene() {
   const tx = P.x / TILE, ty = P.y / TILE, dl = Math.hypot(tx - world.lair.x, ty - world.lair.y);
   const lair = Math.max(0, Math.min(1, (18 - dl) / 10));
   const tile = world.get(Math.floor(tx), Math.floor(ty));
-  setScene({ region: P.region || '', lair, combat: combatLevel({ bossAwake, nearestEngagedDist: nearest, sinceCombat }), outdoors: tile !== T.FLOOR });
+  setScene({ region: P.region || '', lair, combat: combatLevel({ bossAwake, nearestEngagedDist: nearest, sinceCombat }), outdoors: tile !== T.FLOOR, storm: weather.mix('windAudio'), rain: tile === T.FLOOR ? 0 : weather.mix('rain') });
 }
 function updateHud(force) {
   const pct = (a, b) => `${Math.max(0, Math.min(100, (a / b) * 100))}%`;
   $('hpBar').style.width = pct(S.hp, S.maxHp); $('stBar').style.width = pct(S.st, S.maxSt); $('mpBar').style.width = pct(S.mp, S.maxMp);
   $('xpBar').style.width = pct(S.xp, C.xpNeeded(S.level));
   $('hpTxt').textContent = `${Math.ceil(S.hp)} / ${S.maxHp}`; $('stTxt').textContent = `${Math.ceil(S.st)}`; $('mpTxt').textContent = `${Math.ceil(S.mp)}`;
-  $('info').textContent = `Lv ${S.level} · ${S.gold}g · ${P.region || ''}`;
+  $('info').textContent = `Lv ${S.level} · ${S.gold}g · ${P.region || ''} · ${Wx.STATES[weather.state].label}`;
   const m = S.quests.main, sq = S.quests.side;
   $('objective').textContent = m.stage < C.MAIN.DONE ? m.stages[m.stage] : (sq.stage < 3 ? sq.stages[sq.stage] : 'Hrimvald is free. Explore at will.');
   $('shoutCd').textContent = shoutCd > 0 ? Math.ceil(shoutCd) : '';
@@ -444,7 +456,7 @@ function render(time) {
   // fog of war
   g.imageSmoothingEnabled = true; g.drawImage(fogC, ox, oy, WW * ZOOM, WH * ZOOM);
   for (const t of texts) { const [sx, sy] = toS(t.x, t.y); g.globalAlpha = t.t; g.fillStyle = t.color; g.font = `bold ${13 * ZOOM | 0}px Georgia`; g.textAlign = 'center'; g.fillText(t.s, sx, sy); } g.globalAlpha = 1;
-  drawSnow(time); drawMinimap();
+  drawWeather(time); drawMinimap();
 }
 function questMarker(role) { const m = S.quests.main.stage, q = S.quests.side.stage; return (role === 'elder' && (m === 0 || m === 2)) || (role === 'hunter' && (q === 0 || q === 2)); }
 function drawHuman(x, y, body, skin, fx, fy, sw, player) {
@@ -486,12 +498,23 @@ function drawEnemy(e, time) {
   if (e.hp < e.d.hp && e.kind !== 'boss') { g.fillStyle = '#000a'; g.fillRect(sx - 14 * z, sy - 26 * z, 28 * z, 4 * z); g.fillStyle = '#c0392b'; g.fillRect(sx - 14 * z, sy - 26 * z, 28 * z * Math.max(0, e.hp / e.d.hp), 4 * z); }
   if (e.stun > 0) { g.fillStyle = '#fff'; g.font = `${10 * z | 0}px Georgia`; g.textAlign = 'center'; g.fillText('✶', sx, sy - 30 * z); }
 }
-const flakes = Array.from({ length: 70 }, () => ({ x: Math.random(), y: Math.random(), s: 0.5 + Math.random() }));
-function drawSnow(time) {
-  const nearLair = S && Math.hypot(P.x / TILE - world.lair.x, P.y / TILE - world.lair.y) < 14;
+function drawWeather() {
+  const nearLair = Math.hypot(P.x / TILE - world.lair.x, P.y / TILE - world.lair.y) < 14;
+  const tile = world.get(Math.floor(P.x / TILE), Math.floor(P.y / TILE)), indoors = tile === T.FLOOR;
+  const gloom = indoors ? 0 : weather.mix('gloom'), storm = weather.mix('storm'), rain = indoors ? 0 : weather.mix('rain');
+  if (gloom > 0.01) { g.fillStyle = `rgba(20,28,40,${gloom.toFixed(3)})`; g.fillRect(0, 0, W, H); } // one tint pass
+  const wind = (weather.dir * (0.0004 + 0.004 * storm * weather.gust)), n = pool.active(gov.cap, indoors ? 0.15 : weather.mix('density'));
+  const nRain = Math.floor(n * rain), sl = wind * W * 5;
   g.fillStyle = nearLair ? '#3a302cbb' : '#ffffffcc';
-  for (const f of flakes) { f.y += 0.0012 * f.s; f.x += Math.sin(time / 1000 + f.s * 9) * 0.0006; if (f.y > 1) f.y = 0; g.fillRect(((f.x % 1) + 1) % 1 * W, f.y * H, 2 * f.s, 2 * f.s); }
+  for (let i = nRain; i < n; i++) { const f = pool.p[i]; f.y += (0.0012 + 0.002 * storm) * f.s; f.x += wind * f.s; if (f.y > 1) f.y -= 1; f.x -= Math.floor(f.x); g.fillRect(f.x * W, f.y * H, 2 * f.s, 2 * f.s); }
+  if (nRain) { // all rain streaks in one batched path
+    g.strokeStyle = '#a8c4e0aa'; g.lineWidth = 1.2; g.beginPath();
+    for (let i = 0; i < nRain; i++) { const f = pool.p[i]; f.y += 0.02 * f.s; f.x += wind * 3 * f.s; if (f.y > 1) f.y -= 1; f.x -= Math.floor(f.x); const x = f.x * W, y = f.y * H; g.moveTo(x, y); g.lineTo(x + sl * f.s, y + 14 * f.s); }
+    g.stroke();
+  }
+  if (weather.flash > 0 && !indoors) { g.fillStyle = `rgba(255,255,255,${(0.45 * weather.flash).toFixed(3)})`; g.fillRect(0, 0, W, H); }
 }
+const flakes = pool.p;
 function drawMinimap() {
   const s = H < 450 ? 1.3 : 2, mw = world.w * s, mh = world.h * s, x0 = $('menuBtn').getBoundingClientRect().right - mw, y0 = $('menuBtn').getBoundingClientRect().bottom + 8;
   g.globalAlpha = 0.8; g.drawImage(terrain, x0, y0, mw, mh); g.drawImage(fogC, x0, y0, mw, mh); g.globalAlpha = 1;
@@ -524,6 +547,7 @@ $('contBtn').onclick = () => { unlockAudio(); const s = loadSave(); if (s) start
 // ---------- Loop ----------
 function frame(t) {
   const dt = Math.min(0.05, (t - last) / 1000 || 0); last = t;
+  if (running && !paused && !document.hidden) gov.sample(dt);
   update(dt); render(t); requestAnimationFrame(frame);
 }
 // Audio must be created/resumed inside a user gesture (iOS Safari).
@@ -534,4 +558,4 @@ setInterval(() => { if (!running) setScene({ region: 'Whitepass Vale', lair: 0, 
 showTitle(); requestAnimationFrame(frame);
 
 // test hook
-window.__frost = { audioDebug, getSettings, get paused() { return paused; }, get running() { return running; }, get S() { return S; }, get P() { return P; }, get ents() { return ents; }, world, C, input };
+window.__frost = { audioDebug, getSettings, get paused() { return paused; }, get running() { return running; }, get S() { return S; }, get P() { return P; }, get ents() { return ents; }, world, C, input, weather, gov, pool, W: Wx, get push() { return push; }, get shots() { return shots; }, get bossFight() { return bossFight; } };

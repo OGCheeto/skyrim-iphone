@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Frosthold">
+<meta name="theme-color" content="#0c1420">
+<title>Frosthold: Galecry</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud" class="hidden">
+  <div id="bars">
+    <div class="bar"><i id="hpBar" style="background:#c0392b"></i><span id="hpTxt"></span></div>
+    <div class="bar"><i id="stBar" style="background:#3fa34d"></i><span id="stTxt"></span></div>
+    <div class="bar"><i id="mpBar" style="background:#2f6fd6"></i><span id="mpTxt"></span></div>
+    <div class="bar xp"><i id="xpBar" style="background:#d4b04c"></i></div>
+    <div id="info"></div>
+  </div>
+  <div id="objective"></div>
+  <div id="bossbar" class="hidden"><div id="bossName">Vorthrax the Ashwing</div><div class="bar"><i id="bossHp" style="background:#e0662b"></i></div></div>
+  <button id="menuBtn" class="pill">☰ Pack</button>
+  <button id="potBtn" class="pill">⚗ Heal</button>
+  <div id="stick"><div id="knob"></div></div>
+  <div id="buttons">
+    <button class="act" id="bAttack">⚔<small>Attack</small></button>
+    <button class="act" id="bSpell">✦<small>Spell</small></button>
+    <button class="act big" id="bShout">≋<small>Galecry</small><b id="shoutCd"></b></button>
+    <button class="act" id="bUse">✋<small>Use</small></button>
+  </div>
+  <div id="prompt" class="hidden"></div>
+</div>
+
+<div id="toast"></div>
+
+<div id="title" class="screen">
+  <h1>FROSTHOLD</h1><h2>— Galecry —</h2>
+  <p class="lore">Ash falls on the snows of Hrimvald. Vorthrax the Ashwing has woken atop Cinderhorn.</p>
+  <div class="row"><button id="newBtn" class="big-btn">New Journey</button><button id="contBtn" class="big-btn">Continue</button></div>
+  <p class="hint">Best in landscape · Add to Home Screen for fullscreen</p>
+</div>
+
+<div id="classSel" class="screen hidden">
+  <h2>Choose your path</h2>
+  <div id="classes" class="row"></div>
+</div>
+
+<div id="panel" class="screen hidden">
+  <div class="tabs"><button data-tab="inv" class="tab on">Inventory</button><button data-tab="journal" class="tab">Journal</button><button data-tab="char" class="tab">Character</button><button id="closePanel" class="tab close">✕</button></div>
+  <div id="panelBody"></div>
+</div>
+
+<div id="dialog" class="hidden"><div id="dlgName"></div><div id="dlgText"></div><div id="dlgBtns"></div></div>
+
+<div id="rotate"><p>↻ Rotate your iPhone to landscape</p></div>
+<script type="module" src="js/game.js"></script>
+</body>
+</html>

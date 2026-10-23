@@ -82,3 +82,27 @@ Tests: `node test/weather.test.mjs`. For the headless check, run `test/weather.p
 - Fish: Icefin (common), Silverjaw, Glacier Pike, Frostgill Eel (rare). Sell raw to Ilsa the Trader, or cook at the Kettleford fire (Use with raw fish). Frostgill Jerky gives a 120 s frost ward (−30% wolf/wight damage).
 - Storms raise the bite rate. Quest: Brannoc's "A Taste of Icefin" (bring 3 icefin → 60 gold + Bone Hook, which widens the tension zone).
 - Tests: `node test/fishing.test.mjs`; headless: `test/fishing.playwright.mjs`.
+
+## Caves
+Three cave mouths (stone arches) sit on the overworld: **Pinehollow Grotto** (northwest of Kettleford), **Rimewater Hollow** (south) and **Gloamfang Den** (east). Stand at a mouth and tap **Use** to go in.
+- Each cave is its own small tile map, generated from a fixed seed, so it is the same every game. The tests check that the exit, the chest, every enemy spawn and the bank of the pool can all be reached.
+- It is dark underground. You see a circle of light around you (3.5 tiles), and the cave keeps its own fog of war, saved separately from the overworld map.
+- A **Torch** adds 2.5 tiles of light. It burns for 150 s, but only while you are underground, and lights itself when you enter a cave if you are carrying one. You can also light it from the Pack.
+- Enemies: Gloam Wolves (a cave wolf variant), wights and plain wolves. They respawn each time you enter.
+- **Gloamfang Den** holds *Gloamfang*, a huge elite wolf that stays dead once killed, and a unique chest. The chest gives the **Deepfrost Lantern** (+1.5 light permanently, a quest item) and 60 gold. Gloam Wolves and Gloamfang also count toward Brannoc's wolf quest.
+- **Rimewater Hollow** has an underground pool, *Rimewater Pool*, where you can fish.
+- Inside a cave there is no weather or wind and no storm bonus to fishing. The audio switches to a muffled low drone with random water drips.
+- Tap **Use** at the exit to come out at the exact spot where you went in.
+- The game autosaves when you enter or leave. If you save inside a cave, Continue puts you back inside it.
+
+## Woodcutting & crafting
+- Stand next to a pine and tap **Use** to chop, or hold Use to keep chopping. Felling a tree takes **4 hits**, or **2** if you have an axe or hatchet equipped. With an axe, Attack also chops the tree you are facing.
+- Each hit plays a wood *thock* and throws chips. The tree falls over with a "timber" sound and leaves a stump you can walk over.
+- Each tree gives one wood item: **Firewood** (4g, 65%) or **Pine Logs** (9g, 35%). Ilsa buys both at full price.
+- Pines inside Kettleford can't be chopped, so the village layout stays as it is. Felling a tree only ever opens up paths, and a test checks that everywhere reachable before is still reachable after every choppable tree is felled.
+- **Regrowth:** a stump grows back into a pine after **300 s of in-game play time**. If you or an enemy is standing on the tile, it waits a few seconds and tries again. **Stumps are saved**: the save stores the seconds each stump has left, so a cleared grove stays cleared after a reload and the timer does not run while the game is closed. *(The choice: saving stumps stops you from reloading to get fresh trees, and costs only a few bytes per stump.)*
+- **Crafting** (Pack → Craft):
+  - **Campfire** (2 Firewood) can be built anywhere, including in caves. Use it to cook fish, or rest once beside it for +35% HP and +50% stamina. It burns out after 180 s.
+  - **Torch** (1 Pine Log) widens your light in caves.
+
+Tests for caves and woodcutting: `node test/caves.test.mjs && node test/trees.test.mjs`. For the headless check, run `test/caves.playwright.mjs`. It saves screenshots to `/tmp/cave-*.png` and `/tmp/chop-*.png`.

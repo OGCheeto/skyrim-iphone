@@ -1,7 +1,7 @@
 // Pure game logic: world generation, player data, quests, loot, saving. No DOM.
 export const TILE = 32;
 import * as F from './fishing.js';
-export const T = { SNOW:0, DEEP:1, ROCK:2, PINE:3, ROAD:4, ICE:5, WALL:6, FLOOR:7, ASH:8, LAVA:9, HUT:10 };
+export const T = { SNOW:0, DEEP:1, ROCK:2, PINE:3, ROAD:4, ICE:5, WALL:6, FLOOR:7, ASH:8, LAVA:9, HUT:10, CAVE:11, EXIT:12, STUMP:13 };
 const BLOCK = new Set([T.ROCK, T.PINE, T.WALL, T.LAVA, T.HUT]);
 
 export function rng(seed) {
@@ -21,6 +21,8 @@ export const CLASSES = {
 export const ENEMIES = {
   wolf:  { name: 'Frost Wolf', hp: 30, dmg: 7, speed: 120, aggro: 220, range: 34, cd: 1.1, xp: 15, tier: 0, r: 11 },
   wight: { name: 'Hollow Wight', hp: 60, dmg: 12, speed: 70, aggro: 180, range: 34, cd: 1.6, xp: 30, tier: 1, r: 12 },
+  cavewolf:  { name: 'Gloam Wolf', hp: 38, dmg: 9, speed: 125, aggro: 170, range: 34, cd: 1.1, xp: 22, tier: 0, r: 11, wolf: true },
+  gloamfang: { name: 'Gloamfang', hp: 190, dmg: 16, speed: 115, aggro: 200, range: 40, cd: 1.2, xp: 120, tier: 1, r: 16, wolf: true },
   boss:  { name: 'Vorthrax the Ashwing', hp: 650, dmg: 22, speed: 85, aggro: 420, range: 70, cd: 1.4, xp: 500, tier: 2, r: 30 },
 };
 
@@ -53,18 +55,8 @@ export function chestLoot(r = Math.random) {
 }
 
 // ---------- World ----------
-export class World {
-  constructor(seed = 0xf2057401) {
-    this.w = 72; this.h = 54;
-    this.t = new Uint8Array(this.w * this.h);
-    this.village = { x: 12, y: 12 }; this.ruins = { x: 56, y: 42 }; this.lair = { x: 58, y: 11 };
-    const r = rng(seed);
-    this.terrain(r);
-    this.road(this.village, this.ruins, r); this.road(this.village, this.lair, r);
-    this.buildVillage(); this.buildRuins(); this.buildLair(); this.buildFishing(); this.placeChests(); this.placeEnemies(r);
-  }
-  get spawn() { return { x: this.village.x, y: this.village.y - 3 }; }
-  get galestone() { return { x: this.ruins.x, y: this.ruins.y + 2 }; }
+// Shared tile-grid behaviour for the overworld and cave interiors.
+export class Grid {
   in(x, y) { return x >= 0 && y >= 0 && x < this.w && y < this.h; }
   get(x, y) { return this.in(x, y) ? this.t[y * this.w + x] : T.ROCK; }
   set(x, y, v) { if (x > 0 && y > 0 && x < this.w - 1 && y < this.h - 1) this.t[y * this.w + x] = v; }
@@ -75,6 +67,27 @@ export class World {
     return true;
   }
   center(p) { return { x: (p.x + 0.5) * TILE, y: (p.y + 0.5) * TILE }; }
+  disk(c, rad, v) { for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) if (dx * dx + dy * dy <= rad * rad) this.set(c.x + dx, c.y + dy, v); }
+}
+// Overworld cave mouths (interiors are generated in caves.js).
+export const CAVE_SITES = [
+  { id: 'grotto', name: 'Pinehollow Grotto', x: 22, y: 17 },
+  { id: 'rimewater', name: 'Rimewater Hollow', x: 24, y: 46 },
+  { id: 'gloamfang', name: 'Gloamfang Den', x: 46, y: 28 },
+];
+export class World extends Grid {
+  constructor(seed = 0xf2057401) {
+    super();
+    this.w = 72; this.h = 54;
+    this.t = new Uint8Array(this.w * this.h);
+    this.village = { x: 12, y: 12 }; this.ruins = { x: 56, y: 42 }; this.lair = { x: 58, y: 11 };
+    const r = rng(seed);
+    this.terrain(r);
+    this.road(this.village, this.ruins, r); this.road(this.village, this.lair, r);
+    this.buildVillage(); this.buildRuins(); this.buildLair(); this.buildFishing(); this.buildCaves(); this.placeChests(); this.placeEnemies(r);
+  }
+  get spawn() { return { x: this.village.x, y: this.village.y - 3 }; }
+  get galestone() { return { x: this.ruins.x, y: this.ruins.y + 2 }; }
   region(tx, ty) {
     const d = (c) => Math.abs(c.x - tx) + Math.abs(c.y - ty);
     if (d(this.village) < 9) return 'Kettleford';
@@ -105,7 +118,6 @@ export class World {
       else if (p.y !== b.y) p.y += Math.sign(b.y - p.y); else p.x += Math.sign(b.x - p.x);
     }
   }
-  disk(c, rad, v) { for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) if (dx * dx + dy * dy <= rad * rad) this.set(c.x + dx, c.y + dy, v); }
   buildVillage() {
     const c = this.village; this.disk(c, 7, T.SNOW);
     for (let d = -7; d <= 7; d++) { this.set(c.x + d, c.y, T.ROAD); this.set(c.x, c.y + d, T.ROAD); }
@@ -139,6 +151,10 @@ export class World {
     for (let x = 32; x <= 40; x++) { for (let y = 35; y <= 39; y++) if (!this.walk(x, y)) this.set(x, y, T.SNOW); this.set(x, 37, T.ICE); }
     this.fishing.push({ id: 2, name: 'Vale Stream', x: 36, y: 37 });
     for (const [x, y] of [[32, 37], [40, 37]]) { for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) if (!this.walk(x + dx, y + dy)) this.set(x + dx, y + dy, T.SNOW); }
+  }
+  // Cave mouths: clear a snow apron so each is reachable; the arch is drawn as a sprite.
+  buildCaves() {
+    this.caves = CAVE_SITES.map((c) => { this.clear(c, 2); this.set(c.x, c.y, T.SNOW); return { ...c }; });
   }
   placeChests() {
     const R = this.ruins, Lr = this.lair;
@@ -186,7 +202,7 @@ export function newSave(cls, world) {
     v: 1, cls, level: 1, xp: 0, gold: 25,
     maxHp: C.hp, maxSt: C.st, maxMp: C.mp, hp: C.hp, st: C.st, mp: C.mp,
     inv: [w, LOOT.hp(), LOOT.hp(), LOOT.mp()], weapon: w.id, armor: null,
-    quests: initialQuests(), cooked: 0, frostWard: 0, boneHook: false, wolves: 0, boss: false, galestone: false, chests: [],
+    quests: initialQuests(), cave: null, ret: null, caveFog: {}, lantern: false, gloamfang: false, torch: 0, stumps: {}, felled: 0, camp: null, cooked: 0, frostWard: 0, boneHook: false, wolves: 0, boss: false, galestone: false, chests: [],
     x: sp.x, y: sp.y, fog: new Array(Math.ceil(world.w * world.h / 32)).fill(0), savedAt: 0,
   };
 }
@@ -231,7 +247,7 @@ export function sell(s, id) {
   if (it.id === s.armor) s.armor = null;
   const p = sellPrice(it); s.inv.splice(i, 1); s.gold += p; F.syncFishQuest(s); return p;
 }
-export const sellPrice = (it) => it.kind === 'fish' ? it.value : Math.max(1, Math.floor(it.value / 2)); // Ilsa pays full price for fresh fish
+export const sellPrice = (it) => (it.kind === 'fish' || it.kind === 'wood') ? it.value : Math.max(1, Math.floor(it.value / 2)); // Ilsa pays full price for fresh fish and wood
 export function wolfKill(s) {
   const q = s.quests.side; if (q.stage !== 1) return;
   s.wolves++;
@@ -240,13 +256,18 @@ export function wolfKill(s) {
 
 // fog bitset (32 bits per entry)
 export const explored = (s, i) => (s.fog[i >> 5] >>> (i & 31)) & 1;
+// Each cave keeps its own explored bitset in s.caveFog[id]; the overworld uses s.fog.
+export function fogOf(s, world) {
+  if (!world.cave) return s.fog;
+  return (s.caveFog[world.cave] ||= new Array(Math.ceil(world.w * world.h / 32)).fill(0));
+}
 export function reveal(s, world, tx, ty, rad) {
-  const out = [];
+  const out = [], fog = fogOf(s, world);
   for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
     if (dx * dx + dy * dy > rad * rad) continue;
     const x = tx + dx, y = ty + dy; if (!world.in(x, y)) continue;
     const i = y * world.w + x;
-    if (!explored(s, i)) { s.fog[i >> 5] |= (1 << (i & 31)); out.push(i); }
+    if (!((fog[i >> 5] >>> (i & 31)) & 1)) { fog[i >> 5] |= (1 << (i & 31)); out.push(i); }
   }
   return out;
 }
@@ -271,7 +292,7 @@ export function talk(s, role) {
     if (q.stage === 2) { q.stage = 3; s.gold += 75; gainXP(s, 60); s.inv.push(item(LOOT.armors[0]), LOOT.sp()); return { text: 'Quiet nights at last! Take this mantle and some coin. (+75 gold, Fur Mantle)' }; }
     return { text: 'My goats thank you. Well, they would if they could.' };
   }
-  return { text: 'Potions, 30 gold apiece. I buy whatever you drag out of those barrows - and fresh fish, full price.', shop: true };
+  return { text: 'Potions, 30 gold apiece. I buy whatever you drag out of those barrows - and fresh fish or good pine, full price.', shop: true };
 }
 export function buy(s, kind) {
   if (s.gold < 30) return false;
@@ -284,6 +305,7 @@ export function deserialize(str) {
   try {
     const s = JSON.parse(str); if (!(s && s.v === 1 && CLASSES[s.cls])) return null;
     s.quests.fish ||= F.fishQuest(); s.cooked ||= 0; s.frostWard ||= 0; s.boneHook ||= false; // migrate pre-fishing saves
+    s.cave ??= null; s.ret ??= null; s.caveFog ||= {}; s.lantern ||= false; s.gloamfang ||= false; s.torch ||= 0; s.stumps ||= {}; s.felled ||= 0; s.camp ??= null; // pre-cave saves
     return s;
   } catch { return null; }
 }

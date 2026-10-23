@@ -85,19 +85,33 @@ export function suspendAudio() { if (ctx && ctx.state === 'running') ctx.suspend
 export function resumeAudio() { if (ctx && ctx.state !== 'running') ctx.resume(); }
 
 // ---------- Scene (call ~4x/sec) ----------
-export function setScene({ region = '', lair = 0, combat = 0, outdoors = true, storm = 0, rain = 0 } = {}) {
-  Object.assign(state, { region, lair, combat, outdoors, storm, rain });
+export function setScene({ region = '', lair = 0, combat = 0, outdoors = true, cave = false, storm = 0, rain = 0 } = {}) {
+  Object.assign(state, { region, lair, combat, outdoors, cave, storm, rain });
   if (!ctx || ctx.state !== 'running') return;
   const t = ctx.currentTime, st = outdoors ? storm : 0, gust = Math.min(1.4, (GUST[region] ?? 0.5) + st * 0.5), g = Math.random() * gust * (1 + st * 0.5);
   const base = outdoors ? 0.25 + 0.35 * gust + 0.2 * st : 0.08;
-  wind.g.gain.setTargetAtTime((base + g * 0.4) * (1 - lair * 0.6), t, 0.8);
-  wind.f.frequency.setTargetAtTime(300 + g * 900 + gust * 200, t, 1.0);
-  wind.hi.g.gain.setTargetAtTime((0.04 + g * 0.08 * gust) * (1 - lair * 0.7), t, 0.8);
+  // caves: muffled low air (wind lowpassed to a hum), no hiss, plus random water drips
+  wind.g.gain.setTargetAtTime(cave ? 0.12 : (base + g * 0.4) * (1 - lair * 0.6), t, 0.8);
+  wind.f.frequency.setTargetAtTime(cave ? 160 : 300 + g * 900 + gust * 200, t, 1.0);
+  wind.hi.g.gain.setTargetAtTime(cave ? 0 : (0.04 + g * 0.08 * gust) * (1 - lair * 0.7), t, 0.8);
+  if (cave && Math.random() < 0.3) drip(t + Math.random() * 0.2);
   rainL.g.gain.setTargetAtTime(rain * (0.22 + Math.random() * 0.04), t, 1.5);
-  rumble.g.gain.setTargetAtTime(lair * (0.9 + Math.random() * 0.3), t, 1.2);
+  rumble.g.gain.setTargetAtTime(cave ? 0.25 : lair * (0.9 + Math.random() * 0.3), t, 1.2);
   rumble.f.frequency.setTargetAtTime(90 + lair * 80 + Math.random() * 30, t, 1.5);
   buses.combat.gain.setTargetAtTime(combat === 1 ? 1 : 0, t, combat === 1 ? 0.6 : 1.5);
   buses.boss.gain.setTargetAtTime(combat === 2 ? 1 : 0, t, combat === 2 ? 0.5 : 2);
+}
+
+// Water drip on the ambience bus: a quick high sine "plink" falling in pitch, with a faint echo.
+function drip(t) {
+  const f0 = 1400 + Math.random() * 1200;
+  for (const [d, v] of [[0, 0.22], [0.13, 0.06]]) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(f0, t + d); o.frequency.exponentialRampToValueAtTime(f0 * 0.45, t + d + 0.08);
+    g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(v, t + d + 0.005); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.12);
+    o.connect(g); g.connect(buses.amb); o.start(t + d); o.stop(t + d + 0.15);
+  }
+  state.drips = (state.drips || 0) + 1;
 }
 
 // ---------- Drum scheduler (lookahead) ----------
@@ -159,6 +173,9 @@ export const sfx = {
   fire: () => noise(0.4, 0.3, 700, 0.8),
   splash: () => { noise(0.35, 0.35, 900, 0.7); noise(0.18, 0.2, 2600, 1.5); tone(180, 0.15, 'sine', 0.12, -90); },
   bite: () => { tone(1320, 0.18, 'sine', 0.22); setTimeout(() => tone(1760, 0.3, 'sine', 0.2), 90); },
+  chop: () => { noise(0.07, 0.45, 700, 1.2); tone(160, 0.08, 'triangle', 0.22, -60); },
+  timber: () => { noise(0.5, 0.3, 400, 0.6); tone(90, 0.4, 'sine', 0.3, -40); setTimeout(() => noise(0.25, 0.35, 250, 0.8), 380); },
+  cave: () => { tone(110, 0.5, 'sine', 0.2, -40); noise(0.4, 0.12, 300, 0.7); },
   cook: () => { noise(0.6, 0.18, 3200, 0.8); tone(520, 0.12, 'triangle', 0.12); },
   click: () => tone(1200, 0.03, 'square', 0.08),
   die: () => tone(300, 1, 'triangle', 0.3, -250),

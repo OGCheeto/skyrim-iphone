@@ -10,6 +10,7 @@ assert.ok(reach(w.galestone), 'galestone reachable'); assert.ok(reach(w.lair), '
 w.chests.forEach((c) => assert.ok(reach(c), 'chest ' + c.id)); w.npcs.forEach((n) => assert.ok(reach(n), n.name));
 w.fishing.forEach((f) => { assert.ok(reach(f), 'fishing ' + f.name); assert.equal(w.get(f.x, f.y), C.T.ICE, f.name + ' is ice'); }); assert.ok(reach(w.fire), 'fire reachable');
 assert.equal(w.region(w.fishing[0].x, w.fishing[0].y), 'Kettleford', 'one spot in Kettleford'); assert.ok(w.fishing.length >= 2 && w.fishing.length <= 3);
+w.caves.forEach((c) => { assert.ok(reach(c), 'cave mouth ' + c.name); assert.ok(w.walk(c.x, c.y)); assert.notEqual(w.region(c.x, c.y), 'Kettleford'); }); assert.ok(w.caves.length >= 2 && w.caves.length <= 3);
 w.spawns.forEach((s) => assert.ok(w.walk(s.x, s.y), 'spawn ' + s.kind));
 assert.equal(new C.World().t.join(), w.t.join(), 'deterministic');
 for (const cls of Object.keys(C.CLASSES)) {
